@@ -1,135 +1,173 @@
+// Blobby Boss Fight Game
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
 canvas.width = 640;
 canvas.height = 360;
 
-const SPRITES = {
-  blobby: 'assets/blobby.png',
-  troll: 'assets/troll.png',
-  cage: 'assets/cage.png',
-  club: 'assets/club.png'
+let gameState = "menu";
+
+const keys = {};
+const images = {};
+const cages = [];
+const freedBlobbys = [];
+let jumpSound;
+
+const blobby = {
+  x: 100,
+  y: 260,
+  width: 32,
+  height: 32,
+  vy: 0,
+  grounded: false,
+  speed: 2.5
 };
 
-const sounds = {
-  jump: new Audio('assets/jump.wav')
+const troll = {
+  x: 400,
+  y: 260,
+  width: 48,
+  height: 48,
+  health: 3,
+  attacking: false,
+  clubDown: false
 };
 
-let keys = {};
-document.addEventListener('keydown', (e) => keys[e.code] = true);
-document.addEventListener('keyup', (e) => keys[e.code] = false);
+const club = {
+  x: troll.x - 10,
+  y: troll.y,
+  width: 16,
+  height: 32
+};
 
-function loadSprite(src) {
-  return new Promise(resolve => {
+function loadAssets() {
+  const assets = ["blobby.png", "troll.png", "club.png", "cage.png"];
+  let loaded = 0;
+  assets.forEach((name) => {
     const img = new Image();
-    img.src = src;
-    img.onload = () => resolve(img);
+    img.src = `assets/${name}`;
+    img.onload = () => {
+      loaded++;
+      if (loaded === assets.length) init();
+    };
+    images[name] = img;
   });
+
+  jumpSound = new Audio("assets/jump.wav");
 }
 
-async function loadAssets() {
-  const sprites = {};
-  for (let key in SPRITES) {
-    sprites[key] = await loadSprite(SPRITES[key]);
+function init() {
+  for (let i = 0; i < 3; i++) {
+    cages.push({ x: 480 + i * 40, y: 260, freed: false });
   }
-  return sprites;
+  requestAnimationFrame(gameLoop);
 }
 
-function rectsIntersect(r1, r2) {
-  return !(r2.x > r1.x + r1.w || r2.x + r2.w < r1.x || r2.y > r1.y + r1.h || r2.y + r2.h < r1.y);
-}
+document.addEventListener("keydown", (e) => (keys[e.key] = true));
+document.addEventListener("keyup", (e) => (keys[e.key] = false));
 
-class GameObject {
-  constructor(x, y, w, h, sprite) {
-    this.x = x;
-    this.y = y;
-    this.w = w;
-    this.h = h;
-    this.sprite = sprite;
-  }
-  draw(ctx) {
-    ctx.drawImage(this.sprite, this.x, this.y, this.w, this.h);
-  }
-}
+function update() {
+  if (gameState === "playing") {
+    // Movement
+    if (keys["ArrowLeft"]) blobby.x -= blobby.speed;
+    if (keys["ArrowRight"]) blobby.x += blobby.speed;
 
-class Blobby extends GameObject {
-  constructor(x, y, sprite) {
-    super(x, y, 64, 64, sprite);
-    this.vx = 0;
-    this.vy = 0;
-    this.onGround = false;
-    this.jumpPower = -10;
-    this.speed = 3;
-  }
-  update(platforms) {
-    this.vx = 0;
-    if (keys['ArrowLeft']) this.vx = -this.speed;
-    if (keys['ArrowRight']) this.vx = this.speed;
-    if (keys['Space'] && this.onGround) {
-      this.vy = this.jumpPower;
-      sounds.jump.play();
-      this.onGround = false;
+    // Gravity
+    blobby.vy += 0.5;
+    blobby.y += blobby.vy;
+    if (blobby.y >= 260) {
+      blobby.y = 260;
+      blobby.vy = 0;
+      blobby.grounded = true;
     }
-    this.vy += 0.5;
-    this.x += this.vx;
-    this.y += this.vy;
 
-    this.onGround = false;
-    for (let p of platforms) {
-      if (rectsIntersect(this, p) && this.vy >= 0) {
-        this.y = p.y - this.h;
-        this.vy = 0;
-        this.onGround = true;
+    // Jump
+    if (keys[" "] && blobby.grounded) {
+      blobby.vy = -8;
+      blobby.grounded = false;
+      jumpSound.play();
+    }
+
+    // Troll attack
+    if (!troll.attacking && Math.random() < 0.01) {
+      troll.attacking = true;
+      club.y = troll.y;
+      setTimeout(() => {
+        club.y += 30;
+        troll.clubDown = true;
+        setTimeout(() => {
+          troll.attacking = false;
+          troll.clubDown = false;
+          club.y = troll.y;
+        }, 1000);
+      }, 500);
+    }
+
+    // Check collision with club
+    if (
+      troll.clubDown &&
+      blobby.x < club.x + club.width &&
+      blobby.x + blobby.width > club.x &&
+      blobby.y < club.y + club.height &&
+      blobby.y + blobby.height > club.y
+    ) {
+      troll.health--;
+      troll.clubDown = false;
+      if (troll.health <= 0) {
+        gameState = "won";
+        cages.forEach((c, i) => {
+          setTimeout(() => {
+            c.freed = true;
+            freedBlobbys.push({ x: c.x, y: c.y });
+          }, 500 * i);
+        });
       }
     }
+
+    // Update freed blobbys
+    freedBlobbys.forEach((b) => (b.x += 1));
   }
 }
 
-class Troll extends GameObject {
-  constructor(x, y, sprite, club) {
-    super(x, y, 128, 128, sprite);
-    this.hitCount = 0;
-    this.club = club;
-    this.clubX = x + 40;
-    this.clubY = y + 80;
-    this.swinging = false;
-    this.swingTimer = 0;
-  }
-  update() {
-    if (!this.swinging) {
-      this.swinging = true;
-      this.swingTimer = 60;
-    } else {
-      this.swingTimer--;
-      if (this.swingTimer <= 0) {
-        this.swinging = false;
-      }
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#87CEEB";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#654321";
+  ctx.fillRect(0, 300, canvas.width, 60);
+
+  if (gameState === "menu") {
+    ctx.fillStyle = "white";
+    ctx.font = "30px Arial";
+    ctx.fillText("BLOBBY BOSS FIGHT", 180, 160);
+    ctx.font = "20px Arial";
+    ctx.fillText("Tryck på valfri tangent för att börja", 170, 200);
+  } else {
+    // Draw game
+    ctx.drawImage(images["blobby.png"], blobby.x, blobby.y, blobby.width, blobby.height);
+    ctx.drawImage(images["troll.png"], troll.x, troll.y, troll.width, troll.height);
+    ctx.drawImage(images["club.png"], club.x, club.y, club.width, club.height);
+    cages.forEach((c) => {
+      if (!c.freed) ctx.drawImage(images["cage.png"], c.x, c.y, 32, 32);
+    });
+    freedBlobbys.forEach((b) => ctx.drawImage(images["blobby.png"], b.x, b.y, 24, 24));
+
+    if (gameState === "won") {
+      ctx.fillStyle = "white";
+      ctx.font = "30px Arial";
+      ctx.fillText("DU VANN!", 250, 180);
     }
   }
-  draw(ctx) {
-    super.draw(ctx);
-    ctx.drawImage(this.club, this.clubX, this.clubY, 64, 32);
-  }
 }
 
-async function main() {
-  const sprites = await loadAssets();
-  const blobby = new Blobby(100, 100, sprites.blobby);
-  const troll = new Troll(400, 200, sprites.troll, sprites.club);
-  const platforms = [new GameObject(0, 320, 640, 40, { drawImage: () => {} })];
-
-  function loop() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    blobby.update(platforms);
-    troll.update();
-
-    for (let p of platforms) p.draw(ctx);
-    blobby.draw(ctx);
-    troll.draw(ctx);
-
-    requestAnimationFrame(loop);
-  }
-  loop();
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
 }
 
-main();
+document.addEventListener("keydown", () => {
+  if (gameState === "menu") gameState = "playing";
+});
+
+loadAssets();
